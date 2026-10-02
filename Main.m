@@ -9,15 +9,15 @@
 % this file, so it can be run from any folder. All data (processed sessions,
 % cross-session results) are saved under 'Rodent data set/';
 % figures are saved under 'Decode_Latent_States/plots/'.
-% Most sections read the raw session files in 'Rodent data set/fullAnalysis/'
+% Most sections read the raw session files in 'Rodent data set/Raw_data/'
 % and the derived variables (firingRate, rmTrialSet, amTrialSet, drinkLabel,
 % seekIntensity, ...) that earlier sections append to
 % 'Rodent data set/Processed_sessions/'. Cross-session results
 % (session labels, refModelCorr, ...) are saved to
-% 'Rodent data set/Intermediate_results/'.
+% 'Rodent data set/Saved_variables/'.
 %
 % Data dependencies between sections (sections are ordered so that, starting
-% from only 'Rodent data set/fullAnalysis/', switching every flag on
+% from only 'Rodent data set/Raw_data/', switching every flag on
 % regenerates everything in one run):
 %   SessionLabels -> Preprocess (firingRate, creates the processed files)
 %   -> DrinkTime (drinkTime) -> Recurrence (rmSliding, dfcVecSliding)
@@ -45,7 +45,7 @@ clc
 
 %% Section flags (1 = run the section, 0 = skip it)
 % Flags are listed in the same order as the sections run (top to bottom).
-% Starting from only the fullAnalysis folder, all flags can be switched on
+% Starting from only the Raw_data folder, all flags can be switched on
 % in a single run.
 % ---- Core pipeline (saves data to Rodent data set; run these first, in this order) ----
 flag.SessionLabels          = 0; % Rebuild per-session strain / condition labels in file order
@@ -98,9 +98,9 @@ if ~exist(fullfile(projectDir,'Rodent data set'),'dir')
     error('Cannot find the ''Rodent data set'' folder; run Main.m from Project_1 or Decode_Latent_States.');
 end
 dataDir      = fullfile(projectDir,'Rodent data set');
-rawDir       = fullfile(dataDir,'fullAnalysis/');
+rawDir       = fullfile(dataDir,'Raw_data/');
 processedDir = fullfile(dataDir,'Processed_sessions');
-resultDir    = fullfile(dataDir,'Intermediate_results'); % cross-session results for plots / later analysis
+resultDir    = fullfile(dataDir,'Saved_variables'); % cross-session results for plots / later analysis
 plotDir      = fullfile(projectDir,'Decode_Latent_States','plots');
 addpath(fullfile(projectDir,'Decode_Latent_States','functions'));  % helper functions
 if ~exist(processedDir,'dir')
@@ -348,7 +348,7 @@ if flag.CategorizeNeuralState
     amModuleMeans(any(isnan(amModuleMeans),2),:) = [];
     rmModuleMeans(any(isnan(rmModuleMeans),2),:) = [];
     plotModuleSummary(amModuleMeans, 'Affinity Values');
-    [pRM12, pRM23] = plotModuleSummary(rmModuleMeans, 'Recurrence Values');
+    plotModuleSummary(rmModuleMeans, 'Recurrence Values');
     [~, pAMvsRM] = ttest2(rmModuleMeans(:), amModuleMeans(:));
 
     % ---- MI between modules and drinking / seeking labels ----
@@ -383,8 +383,7 @@ if flag.CategorizeNeuralState
     ylabel('Mutual Information');
     [~, pMiNullVsDrink] = ttest(miNull, miDrink);
     [~, pMiDrinkVsSeek] = ttest(miDrink, miSeek);
-    % NOTE: sigstar uses pRM12/pRM23 from the RM bar plot above, not pMiNullVsDrink/pMiDrinkVsSeek computed here
-    sigstar({{'Null','Original Label'}, {'Original Label','Seeking Intensity'}}, [pRM12, pRM23]);
+    sigstar({{'Null','Original Label'}, {'Original Label','Seeking Intensity'}}, [pMiNullVsDrink, pMiDrinkVsSeek]);
     ylim([0 1])
 
     % ---- Seeking-threshold sweep: mean MI with the seeking labels ----
@@ -1037,7 +1036,7 @@ end
 if flag.GaussianWidth
     binSize = 0.1;     % spike-count bin size in seconds (100 ms)
     sigmaList = [1, 1/4, 1/8];            % kernel std levels: sigma, sigma/4, sigma/8
-    sigmaLabels = {'\sigma=mean','\sigma=mean/4','\sigma=mean/8'};
+    sigmaLabels = {'\sigma=1','\sigma=1/4','\sigma=1/8'};
     nSigma = numel(sigmaList);
 
     % ---- Example neuron (session 2): raw spike counts vs. three kernel widths ----
@@ -1058,7 +1057,7 @@ if flag.GaussianWidth
         firingRate = spikesToFiringRate(spkData, binSize, sigmaList(si));
         plot(firingRate(1,1:500),'linewidth',1.5 + 0.5*(si==nSigma));
     end
-    legend('Raw Data','sigma=mean','sigma=mean/4','sigma=mean/8','FontSize',20)
+    legend([{'Raw Data'}, sigmaLabels], 'FontSize',20)
     xlabel('Time(0.1s)');
     ylabel('Neuron Firing Rate');
     title('Neuron Firing Rate with Different Gaussian Filters');
@@ -1090,11 +1089,7 @@ if flag.GaussianWidth
     end
     [~, bestSigmaIdx] = min(scoreAll, [], 1);
 
-    figure;
     counts = histcounts(bestSigmaIdx, 0.5:1:(nSigma+0.5));
-    bar(categorical(1:nSigma, 1:nSigma, sigmaLabels), counts, 'barwidth',0.5);
-    ylabel('Number of Neurons');
-    title('Preferred Gaussian Sigma per Neuron');
 
     % Group-level TV and peaks (mean over sessions of the per-session means)
     semOfSessions = @(c) std(cellfun(@(x) std(x)/sqrt(length(x)), c)) / sqrt(length(c));
@@ -1103,21 +1098,33 @@ if flag.GaussianWidth
     meanPeak = cellfun(@(c) mean(cellfun(@mean, c)), peaksBySigma);
     semPeak  = cellfun(semOfSessions, peaksBySigma);
 
+    % Bar plots in the same hatched style as the module bar plots
+    % Preferred sigma per neuron (separate figure)
     figure;
-    subplot(1,2,1);
-    bar(meanTv);
-    hold on;
-    errorbar(1:nSigma, meanTv, semTv, '.k');
+    hatchedBars(counts, []);
+    xticks(1:nSigma);
     xticklabels(sigmaLabels);
-    ylabel('Total Variation');
-    title('Average Smoothness (TV)');
-    subplot(1,2,2);
-    bar(meanPeak);
-    hold on;
-    errorbar(1:nSigma, meanPeak, semPeak, '.k');
-    xticklabels(sigmaLabels);
-    ylabel('Number of Peaks');
-    title('Preserved Signal Details');
+    xlim([0.5 nSigma+0.5]);
+    ylabel('Number of Neurons');
+    title('Preferred Gaussian Sigma per Neuron');
+    box off;
+    axis square;
+
+    % Smoothness and number of peaks (one combined figure)
+    bars = {meanTv,   semTv,   'Total Variation', 'Smoothness';
+            meanPeak, semPeak, 'Number of Peaks', 'Preserved Signal Details'};
+    figure;
+    for k = 1:2
+        subplot(1,2,k);
+        hatchedBars(bars{k,1}, bars{k,2});
+        xticks(1:nSigma);
+        xticklabels(sigmaLabels);
+        xlim([0.5 nSigma+0.5]);
+        ylabel(bars{k,3});
+        title(bars{k,4});
+        box off;
+        axis square;
+    end
 end
 
 %% Recurrence matrices with different window lengths (supplementary S2)
